@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createFakePlacesRepository } from "../adapters/supabase/fake-places-repository";
-import { bandFor } from "../domain/story";
+import { bandFor, placeFacts } from "../domain/story";
 import { AppError } from "../lib/errors";
 import { KIDS_STORY_SYSTEM_PROMPT, STORY_SYSTEM_PROMPT } from "../prompts/story";
 import type { LlmProvider } from "./ports";
@@ -202,6 +202,107 @@ describe("createStoryService", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
+  describe("what the listener heard before", () => {
+    const DAY = 24 * 3600;
+    async function heardAll() {
+      const placeId = await anyPlace();
+      const place = await places.getById(placeId);
+      if (!place) throw new Error("no place");
+      return { place, heardFacts: placeFacts(place).map((f) => f.id) };
+    }
+
+    it("says when it told the place before, never „Pamiętasz”", async () => {
+      const { place, heardFacts } = await heardAll();
+      const llm = fakeLlm();
+      const service = createStoryService({ places, llm });
+      const ask = (heardAgoSec: number) =>
+        service.tell({ placeId: place.id, targetSec: 40, heardFacts, heardAgoSec });
+
+      expect((await ask(95 * DAY)).recap).toBe(true);
+      await ask(8 * DAY);
+      const [months, week] = llm.complete.mock.calls.map(([call]) => call.user);
+      expect(months).toContain("Trzy miesiące temu opowiadałam ci");
+      expect(week).toContain("Tydzień temu opowiadałam ci");
+      expect(months).not.toContain("Pamiętasz");
+      // Another phrase is another story, not the cached one.
+      expect(llm.complete).toHaveBeenCalledTimes(2);
+
+      const plain = await createStoryService({ places }).tell({
+        placeId: place.id,
+        targetSec: 40,
+        heardFacts,
+        heardAgoSec: DAY + 60,
+      });
+      expect(plain.text).toContain("Wczoraj opowiadałam ci");
+      expect(plain.text).not.toMatch(/Znowu|Pamiętasz/);
+    });
+
+    it("tells a partly heard place as more, with when it told the rest", async () => {
+      const { place, heardFacts } = await heardAll();
+      const llm = fakeLlm();
+      await createStoryService({ places, llm }).tell({
+        placeId: place.id,
+        targetSec: 40,
+        heardFacts: heardFacts.slice(0, 1),
+        heardAgoSec: 8 * DAY,
+      });
+      const { user } = llm.complete.mock.calls[0]?.[0] ?? { user: "" };
+      expect(user).toContain("Tydzień temu mówiłam ci już");
+      expect(user).toContain("ale jest jeszcze coś");
+    });
+
+    it("asked for more with nothing new left: says so at once and offers the place next door", async () => {
+      const { place, heardFacts } = await heardAll();
+      const llm = { ...fakeLlm(), stream: vi.fn() };
+      const service = createStoryService({ places, llm });
+      const story = await service.tell({
+        placeId: place.id,
+        targetSec: 40,
+        heardFacts,
+        heardAgoSec: 30,
+        more: true,
+        heardPlaceIds: [place.id],
+      });
+
+      expect(llm.complete).not.toHaveBeenCalled();
+      expect(story.text).toMatch(
+        /^O tym miejscu opowiedziałam ci już wszystko, co wiem\. Ale mogę/,
+      );
+      expect(story.suggestion).toEqual({
+        placeId: "okopy-lubomirskiego",
+        name: "Okopy Lubomirskiego",
+      });
+      expect(story.text).toContain("tuż obok: Okopy Lubomirskiego.");
+      expect(story.factIds).toEqual([]);
+
+      const streamed = await service.tellStream({
+        placeId: place.id,
+        targetSec: 40,
+        heardFacts,
+        more: true,
+        heardPlaceIds: [place.id, "okopy-lubomirskiego"],
+      });
+      const next = await streamed.story;
+      expect(llm.stream).not.toHaveBeenCalled();
+      expect(next.suggestion?.placeId).not.toBe("okopy-lubomirskiego");
+      expect(streamed.whole).toBe(next.text);
+    });
+
+    it("offers nothing when every place around was heard", async () => {
+      const { place, heardFacts } = await heardAll();
+      const all = await places.listInBBox({ minLng: -180, minLat: -90, maxLng: 180, maxLat: 90 });
+      const story = await createStoryService({ places }).tell({
+        placeId: place.id,
+        targetSec: 40,
+        heardFacts,
+        more: true,
+        heardPlaceIds: all.map((p) => p.id),
+      });
+      expect(story.text).toBe("O tym miejscu opowiedziałam ci już wszystko, co wiem.");
+      expect(story.suggestion).toBeNull();
+    });
+  });
+
   describe("tellStream", () => {
     function streamingLlm(...pieces: string[]) {
       const stream = vi.fn(async function* () {
@@ -254,5 +355,58 @@ describe("createStoryService", () => {
       expect((await told.story).text).toBe(text);
       expect(onLlmError).toHaveBeenCalledOnce();
     });
+  });
+});
+
+describe("a place with nothing worth telling", () => {
+  // Al. Solidarności 171 as the seed has it: only office space, floors and the neighbours.
+  async function dullPlaces() {
+    const base = await places.getById(await anyPlace());
+    if (!base) throw new Error("fake repository is empty");
+    const dull = {
+      ...base,
+      id: "biurowiec",
+      name: "al. Solidarności 171 (budynek biurowy)",
+      facts: [
+        "Budynek ma w OSM 10 kondygnacji i charakter biurowy (building=office).",
+        "Całkowita powierzchnia biurowa to 70 000 m², a I etap dostarczy 86 miejsc parkingowych.",
+      ],
+      trivia: [],
+    };
+    return createFakePlacesRepository([dull]);
+  }
+
+  it("stays silent without asking the model, and keeps the name for the card", async () => {
+    const llm = fakeLlm();
+    const service = createStoryService({ places: await dullPlaces(), llm });
+    const story = await service.tell({ placeId: "biurowiec", targetSec: 60 });
+
+    expect(story).toMatchObject({ silent: true, text: "al. Solidarności 171", factIds: [] });
+    expect(llm.complete).not.toHaveBeenCalled();
+  });
+
+  it("streams no text, so no voice is made", async () => {
+    const stream = vi.fn(async function* () {
+      yield '{"text":"nie"}';
+    });
+    const llm = { ...fakeLlm(), stream };
+    const told = await createStoryService({ places: await dullPlaces(), llm }).tellStream({
+      placeId: "biurowiec",
+      targetSec: 60,
+    });
+
+    expect(told.silent).toBe(true);
+    expect(told.whole).toBeUndefined();
+    expect((await told.story).silent).toBe(true);
+    expect(stream).not.toHaveBeenCalled();
+  });
+
+  it("stays silent when the model finds nothing worth telling", async () => {
+    const placeId = await anyPlace();
+    const llm = fakeLlm('{"text":"","silent":true,"usedIds":[],"sourceIds":[]}');
+    const story = await createStoryService({ places, llm }).tell({ placeId, targetSec: 40 });
+
+    expect(story).toMatchObject({ placeId, silent: true, factIds: [] });
+    expect(story.text.length).toBeGreaterThan(0);
   });
 });

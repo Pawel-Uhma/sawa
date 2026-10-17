@@ -4,15 +4,21 @@ import { contextFor, STORY_CONTEXTS } from "./contexts";
 import type { Place } from "./place";
 import type { Finding } from "./research";
 import {
+  agoPhrase,
   bandFor,
+  bboxAround,
   createStoryTextReader,
   factsStory,
   findingSources,
   fitWords,
+  heardIntro,
   isGentleForKids,
+  nearestUnheard,
+  nothingNewText,
   parseStoryAnswer,
   pickFacts,
   placeFacts,
+  spokenName,
   storyCacheKey,
   storyWords,
   WORDS_PER_SEC,
@@ -204,6 +210,104 @@ describe("factsStory", () => {
     expect(draft.usedIds).toEqual([pick.facts[0]?.id]);
     expect(draft.sources).toEqual(place.sources);
   });
+
+  it("says when Sawa told about the place before instead of assuming the listener remembers", () => {
+    const pick = pickFacts(place, { heard: placeFacts(place).map((f) => f.id), band: bandFor(60) });
+    const heard = "Wczoraj opowiadałam ci o tym miejscu.";
+    const draft = factsStory(place, pick, place.sources, 60, heard);
+    expect(draft.text).toMatch(/^Mijamy: Kercelak\. Wczoraj opowiadałam ci o tym miejscu\. /);
+    expect(draft.text).not.toMatch(/Znowu|Pamiętasz/);
+  });
+});
+
+describe("agoPhrase", () => {
+  const H = 3600;
+  const D = 24 * H;
+  it.each([
+    [0, "przed chwilą"],
+    [59 * 60, "przed chwilą"],
+    [5 * H, "dziś"],
+    [D + H, "wczoraj"],
+    [2 * D, "przedwczoraj"],
+    [3 * D, "trzy dni temu"],
+    [6 * D + 23 * H, "sześć dni temu"],
+    [7 * D, "tydzień temu"],
+    [13 * D, "tydzień temu"],
+    [14 * D, "dwa tygodnie temu"],
+    [21 * D, "trzy tygodnie temu"],
+    [29 * D, "cztery tygodnie temu"],
+    [30 * D, "miesiąc temu"],
+    [60 * D, "dwa miesiące temu"],
+    [95 * D, "trzy miesiące temu"],
+    [150 * D, "pięć miesięcy temu"],
+    [200 * D, "pół roku temu"],
+    [364 * D, "pół roku temu"],
+    [365 * D, "rok temu"],
+    [2 * 365 * D, "dwa lata temu"],
+    [5 * 365 * D, "pięć lat temu"],
+    [12 * 365 * D, "dwanaście lat temu"],
+    [22 * 365 * D, "dwadzieścia dwa lata temu"],
+  ])("%i s → %s", (sec, phrase) => {
+    expect(agoPhrase(sec)).toBe(phrase);
+  });
+});
+
+describe("heardIntro", () => {
+  const building = { kind: "building" } as const;
+  it("says when Sawa told it, never asks whether the listener remembers", () => {
+    expect(heardIntro(building, 95 * 24 * 3600, true)).toBe(
+      "Trzy miesiące temu opowiadałam ci o tym budynku.",
+    );
+    expect(heardIntro({ kind: "street" }, 8 * 24 * 3600, false)).toBe(
+      "Tydzień temu mówiłam ci już o tej ulicy, ale jest jeszcze coś.",
+    );
+    expect(heardIntro(building, undefined, true)).toBe("Już ci kiedyś opowiadałam o tym budynku.");
+    expect(heardIntro(building, 10, true)).not.toMatch(/pamięta/i);
+  });
+});
+
+describe("nearestUnheard", () => {
+  const at = { lat: 52.2370217, lng: 20.9733 };
+  const summary = (id: string, dLat: number, richness = 3) => ({
+    id,
+    name: id,
+    kind: "building" as const,
+    interests: [],
+    position: { lat: at.lat + dLat, lng: at.lng },
+    richness,
+  });
+  // 0.001° of latitude is about 111 m.
+  const around = [
+    summary("here", 0),
+    summary("near-heard", 0.0005),
+    summary("empty", 0.0006, 0),
+    summary("next", 0.0015),
+    summary("far", 0.004),
+  ];
+
+  it("takes the closest place with something to tell that the listener has not heard", () => {
+    expect(nearestUnheard(at, around, new Set(["here", "near-heard"]))?.id).toBe("next");
+  });
+
+  it("finds nothing beyond the radius", () => {
+    expect(nearestUnheard(at, around, new Set(["here", "near-heard", "next"]))).toBeNull();
+  });
+
+  it("looks in a box that holds the radius", () => {
+    const box = bboxAround(at, 300);
+    expect(box.maxLat - at.lat).toBeCloseTo(300 / 111_320, 6);
+    expect(box.maxLng - at.lng).toBeGreaterThan(box.maxLat - at.lat);
+  });
+});
+
+describe("nothingNewText", () => {
+  it("says everything was told and offers the place next door by its spoken name", () => {
+    expect(nothingNewText(null)).toBe("O tym miejscu opowiedziałam ci już wszystko, co wiem.");
+    expect(nothingNewText({ name: "Kercelak (plac Kercelego)" })).toBe(
+      "O tym miejscu opowiedziałam ci już wszystko, co wiem. Ale mogę ci opowiedzieć o miejscu tuż obok: Kercelak.",
+    );
+    expect(spokenName("Mural (stary)")).toBe("Mural");
+  });
 });
 
 describe("createStoryTextReader", () => {
@@ -214,5 +318,29 @@ describe("createStoryTextReader", () => {
     for (const ch of raw) text += reader.push(ch);
     expect(text).toBe('Bowie ży"ł" tu. Koniec');
     expect(reader.raw).toBe(raw);
+  });
+});
+
+describe("dry data and silence", () => {
+  it("leaves office space and map tags out of what Sawa may tell", () => {
+    const lines = placeFacts({
+      facts: [
+        "Budynek ma w OSM 10 kondygnacji (building=office).",
+        "Przy budowie znaleziono monety z XIX wieku.",
+      ],
+      trivia: ["Całkowita powierzchnia biurowa to 70 000 m² i 86 miejsc parkingowych."],
+    });
+    expect(lines.map((l) => l.text)).toEqual(["Przy budowie znaleziono monety z XIX wieku."]);
+  });
+
+  it("reads the model's silence only when it said nothing", () => {
+    expect(parseStoryAnswer('{"text":"","silent":true}', [])).toEqual({
+      text: "",
+      sources: [],
+      usedIds: [],
+      silent: true,
+    });
+    expect(parseStoryAnswer('{"text":"Coś.","silent":true}', [])?.silent).toBeUndefined();
+    expect(parseStoryAnswer('{"text":""}', [])).toBeNull();
   });
 });

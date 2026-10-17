@@ -1,17 +1,24 @@
 import type { Story, StoryRequestInput } from "@sawa/shared";
 import { contextFor, knownContextsOf } from "../domain/contexts";
+import type { Place } from "../domain/place";
 import {
   bandFor,
+  bboxAround,
   cleanForSpeech,
   createStoryTextReader,
   type FactPick,
   factsStory,
   findingSources,
   fitWords,
+  heardIntro,
   isGentleForKids,
+  NEARBY_RADIUS_M,
+  nearestUnheard,
+  nothingNewText,
   parseStoryAnswer,
   pickFacts,
   type StoryDraft,
+  spokenName,
   storyCacheKey,
   storyWords,
 } from "../domain/story";
@@ -41,10 +48,13 @@ export type StoryStream = {
   whole?: string;
   /** The finished story, once `text` was read to the end. */
   story: Promise<Story>;
+  /** Known up front: nothing worth telling, so there is no voice to make. */
+  silent?: boolean;
 };
 
 export type StoryDeps = {
-  places: Pick<PlacesRepository, "getById">;
+  /** `listInBBox` finds a place next door when nothing new is left to tell (`more`). */
+  places: Pick<PlacesRepository, "getById" | "listInBBox">;
   /** Missing → every story is the place's facts read plainly (factsStory). */
   llm?: LlmProvider;
   /** Missing → stories use the seed's facts only. */
@@ -65,15 +75,58 @@ async function* once(text: string) {
   yield text;
 }
 
-/** A story known in full, as a stream of one piece. */
-const known = (story: Story): StoryStream => ({
-  text: once(story.text),
-  whole: story.text,
-  story: Promise.resolve(story),
+/** A story known in full, as a stream of one piece; a silent one says nothing. */
+const known = (story: Story): StoryStream =>
+  story.silent
+    ? { text: once(""), story: Promise.resolve(story), silent: true }
+    : { text: once(story.text), whole: story.text, story: Promise.resolve(story) };
+
+/**
+ * Nothing worth telling here (only dry data, nothing found on the web): Sawa stays quiet, no
+ * LLM, no voice. `text` is the place's name, for the card; the client does not read it out.
+ */
+const silentStory = (place: Place): Story => ({
+  placeId: place.id,
+  text: spokenName(place.name),
+  sources: [],
+  cached: false,
+  factIds: [],
+  contextIds: [],
+  recap: false,
+  suggestion: null,
+  silent: true,
 });
 
 export function createStoryService({ places, llm, research, onLlmError }: StoryDeps): StoryService {
   const cache = new Map<string, Promise<StoryDraft>>();
+
+  /**
+   * The closest place around `place` the listener has not heard about, with something to tell;
+   * null when there is none or the lookup fails (Sawa then just says she told everything).
+   */
+  async function nearby(place: Place, heardPlaceIds: readonly string[]) {
+    try {
+      const around = await places.listInBBox(bboxAround(place.position, NEARBY_RADIUS_M));
+      return nearestUnheard(place.position, around, new Set([place.id, ...heardPlaceIds]));
+    } catch {
+      return null;
+    }
+  }
+
+  /** "Opowiedz więcej" with nothing new left: no recap, Sawa says so and offers the place next door. */
+  async function nothingNew(place: Place, heardPlaceIds: readonly string[]): Promise<Story> {
+    const next = await nearby(place, heardPlaceIds);
+    return {
+      placeId: place.id,
+      text: nothingNewText(next),
+      sources: [],
+      cached: false,
+      factIds: [],
+      contextIds: [],
+      recap: true,
+      suggestion: next ? { placeId: next.id, name: spokenName(next.name) } : null,
+    };
+  }
 
   function remember(key: string, draft: Promise<StoryDraft>) {
     cache.set(key, draft);
@@ -86,7 +139,7 @@ export function createStoryService({ places, llm, research, onLlmError }: StoryD
   /** Everything a story needs before the model writes it. */
   async function prepare(request: StoryRequestInput) {
     const { placeId, targetSec, storyStyle, familiarity, audience, side } = request;
-    const { interests = [], heardFacts = [], knownContexts = [] } = request;
+    const { interests = [], heardFacts = [], knownContexts = [], heardAgoSec, more } = request;
     const place = await places.getById(placeId);
     if (!place) throw new AppError("NOT_FOUND", `Place "${placeId}" not found`);
     const band = bandFor(targetSec);
@@ -102,20 +155,37 @@ export function createStoryService({ places, llm, research, onLlmError }: StoryD
       reservedWords,
       findings,
     });
+    // Asked for more, but everything here was told: not a recap, a pointer to the place next door.
+    if (more && (pick.recap || pick.facts.length === 0)) {
+      return { done: await nothingNew(place, request.heardPlaceIds ?? []) };
+    }
+    // Nothing left once the dry data is gone (dry-facts.ts): quiet instead of a dull story.
+    if (pick.facts.length === 0) return { done: silentStory(place) };
+    // Heard before: Sawa says when ("trzy miesiące temu opowiadałam ci…"), never "Pamiętasz…".
+    // Not after "Opowiedz więcej", where the listener has just heard her.
+    const heard =
+      pick.recap || (!more && heardFacts.length > 0 && heardAgoSec !== undefined)
+        ? heardIntro(place, heardAgoSec, pick.recap)
+        : null;
     const words = fitWords(storyWords(band, storyStyle, pick.recap, audience), pick, reservedWords);
     // What the listener remembers once the story was heard (apps/web lib/memory.ts).
-    const answer = (draft: StoryDraft, cached: boolean): Story => ({
-      placeId,
-      text: draft.text,
-      sources: draft.sources,
-      cached,
-      factIds: toldIds(pick, draft),
-      contextIds: context ? [context.id] : [],
-      recap: pick.recap,
-    });
+    const answer = (draft: StoryDraft, cached: boolean): Story =>
+      // The model judged the material not worth telling (prompts/story.ts): quiet, nothing heard.
+      draft.silent
+        ? { ...silentStory(place), cached }
+        : {
+            placeId,
+            text: draft.text,
+            sources: draft.sources,
+            cached,
+            factIds: toldIds(pick, draft),
+            contextIds: context ? [context.id] : [],
+            recap: pick.recap,
+            suggestion: null,
+          };
     // Read plainly, war facts are too harsh for a child: the facts story keeps to the name.
     const plainPick = audience === "kids" && isGentleForKids(place) ? { ...pick, facts: [] } : pick;
-    const plainDraft = factsStory(place, plainPick, sources, words);
+    const plainDraft = factsStory(place, plainPick, sources, words, heard);
     // The facts story does not explain the background, so it stays unexplained.
     const plain = {
       ...answer(plainDraft, false),
@@ -130,6 +200,7 @@ export function createStoryService({ places, llm, research, onLlmError }: StoryD
       pick.facts.map((f) => f.id).join("."),
       context?.id ?? "",
       String(pick.recap),
+      heard ?? "",
       ...knownContextsOf(place, knownContexts).map((c) => c.id),
     ]);
     const prompt = {
@@ -144,14 +215,17 @@ export function createStoryService({ places, llm, research, onLlmError }: StoryD
         side,
         context,
         knownContexts: knownContextsOf(place, knownContexts),
+        heardIntro: heard,
       }),
       maxTokens: band.words * TOKENS_PER_WORD,
     };
-    return { placeId, sources, answer, plain, key, prompt };
+    return { done: null, placeId, sources, answer, plain, key, prompt };
   }
 
   async function tell(request: StoryRequestInput): Promise<Story> {
-    const { placeId, sources, answer, plain, key, prompt } = await prepare(request);
+    const prepared = await prepare(request);
+    if (prepared.done) return prepared.done;
+    const { placeId, sources, answer, plain, key, prompt } = prepared;
     if (!llm) return plain;
     const hit = cache.get(key);
     if (hit) return answer(await hit, true);
@@ -179,7 +253,9 @@ export function createStoryService({ places, llm, research, onLlmError }: StoryD
 
     async tellStream(request) {
       if (!llm?.stream) return known(await tell(request));
-      const { placeId, sources, answer, plain, key, prompt } = await prepare(request);
+      const prepared = await prepare(request);
+      if (prepared.done) return known(prepared.done);
+      const { placeId, sources, answer, plain, key, prompt } = prepared;
       const hit = cache.get(key);
       if (hit) return known(await hit.then((d) => answer(d, true)).catch(() => plain));
 

@@ -1,5 +1,6 @@
-import { type Audience, factId, type StoryStyle } from "@sawa/shared";
-import type { Place, PlaceSource } from "./place";
+import { type Audience, factId, haversineM, type LatLng, type StoryStyle } from "@sawa/shared";
+import { isDryFact } from "./dry-facts";
+import type { BBox, Place, PlaceKind, PlaceSource, PlaceSummary } from "./place";
 import type { Finding } from "./research";
 
 /** Polish speech in ElevenLabs runs at about 2.5 words a second (docs/12-plan-mvp.md §8). */
@@ -104,6 +105,9 @@ export function placeFacts(
   findings: readonly Finding[] = [],
 ): StoryFact[] {
   const sources = findingSources(findings);
+  // Office space, parking places and map tags are never told (dry-facts.ts).
+  const facts = place.facts.filter((t) => !isDryFact(t));
+  const trivia = place.trivia.filter((t) => !isDryFact(t));
   const lines: StoryFact[] = [
     ...findings.map((f) => ({
       id: factId(f.text),
@@ -111,9 +115,9 @@ export function placeFacts(
       kind: "story" as const,
       sourceId: sources.find((s) => s.url === f.url)?.id,
     })),
-    ...place.facts.slice(0, 1).map(fact),
-    ...place.trivia.map((text) => ({ id: factId(text), text, kind: "trivia" as const })),
-    ...place.facts.slice(1).map(fact),
+    ...facts.slice(0, 1).map(fact),
+    ...trivia.map((text) => ({ id: factId(text), text, kind: "trivia" as const })),
+    ...facts.slice(1).map(fact),
   ];
   return lines.filter((line, i) => lines.findIndex((l) => l.id === line.id) === i);
 }
@@ -174,7 +178,13 @@ export function pickFacts(
 }
 
 /** `usedIds`: the picked lines the model says it told. */
-export type StoryDraft = { text: string; sources: PlaceSource[]; usedIds: string[] };
+export type StoryDraft = {
+  text: string;
+  sources: PlaceSource[];
+  usedIds: string[];
+  /** The model found nothing worth telling (`{"text": "", "silent": true}`): Sawa stays quiet. */
+  silent?: boolean;
+};
 
 /**
  * Reads the model's `{ text, usedIds, sourceIds }` answer. Unknown source ids are dropped; with
@@ -189,9 +199,11 @@ export function parseStoryAnswer(raw: string, sources: readonly PlaceSource[]): 
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
-  const { text, sourceIds, usedIds } = parsed as Record<string, unknown>;
+  const { text, sourceIds, usedIds, silent } = parsed as Record<string, unknown>;
   if (typeof text !== "string") return null;
   const clean = cleanForSpeech(text);
+  // Silent only with nothing said: a story already spoken is the story.
+  if (!clean && silent === true) return { text: "", sources: [], usedIds: [], silent: true };
   if (!clean) return null;
 
   const strings = (v: unknown) =>
@@ -213,15 +225,18 @@ export function cleanForSpeech(text: string): string {
 /**
  * Used when the LLM is missing or fails: the picked lines read plainly, as many as fit `words`.
  * Plain, but true and sourced, so the demo never goes silent. Without the LLM the background
- * is not woven in, so it stays unexplained for the next story.
+ * is not woven in, so it stays unexplained for the next story. `heard`: `heardIntro`, when the
+ * listener heard about the place before.
  */
 export function factsStory(
   place: Place,
   pick: FactPick,
   sources: readonly PlaceSource[] = place.sources,
   words = Number.POSITIVE_INFINITY,
+  heard?: string | null,
 ): StoryDraft {
-  const intro = pick.recap ? `Znowu mijamy: ${place.name}.` : `Mijamy: ${place.name}.`;
+  // The listener may not remember the earlier story: Sawa says when she told it (`heard`).
+  const intro = [`Mijamy: ${place.name}.`, heard].filter(Boolean).join(" ");
   const told: StoryFact[] = [];
   let used = wordCount(intro);
   for (const fact of pick.facts) {
@@ -232,6 +247,161 @@ export function factsStory(
   }
   const text = cleanForSpeech([intro, ...told.map((f) => f.text)].join(" "));
   return { text, sources: [...sources], usedIds: told.map((f) => f.id) };
+}
+
+const NUMBERS_PL = [
+  "zero",
+  "jeden",
+  "dwa",
+  "trzy",
+  "cztery",
+  "pięć",
+  "sześć",
+  "siedem",
+  "osiem",
+  "dziewięć",
+  "dziesięć",
+  "jedenaście",
+  "dwanaście",
+  "trzynaście",
+  "czternaście",
+  "piętnaście",
+  "szesnaście",
+  "siedemnaście",
+  "osiemnaście",
+  "dziewiętnaście",
+];
+const TENS_PL = ["", "", "dwadzieścia", "trzydzieści", "czterdzieści", "pięćdziesiąt"];
+
+/** A count in words (the text goes to TTS), up to 59; above that the digits. */
+function numberPl(n: number): string {
+  if (n < NUMBERS_PL.length) return NUMBERS_PL[n] as string;
+  const tens = TENS_PL[Math.floor(n / 10)];
+  if (!tens) return String(n);
+  return n % 10 ? `${tens} ${NUMBERS_PL[n % 10]}` : tens;
+}
+
+/** "dwa tygodnie", "pięć tygodni", "dwadzieścia dwa lata": Polish plural after a count (2 and up). */
+function countPl(n: number, [few, many]: readonly [string, string]): string {
+  const ones = n % 10;
+  const teens = n % 100 >= 12 && n % 100 <= 14;
+  return `${numberPl(n)} ${ones >= 2 && ones <= 4 && !teens ? few : many}`;
+}
+
+const HOUR_SEC = 3600;
+const DAY_SEC = 24 * HOUR_SEC;
+
+/**
+ * How long ago, in spoken Polish, rounded down to whole units: "przed chwilą", "dziś",
+ * "wczoraj", "trzy dni temu", "dwa tygodnie temu", "pięć miesięcy temu", "pół roku temu",
+ * "rok temu". Days are counted from the elapsed time, not from the calendar.
+ */
+export function agoPhrase(sec: number): string {
+  if (sec < HOUR_SEC) return "przed chwilą";
+  const days = Math.floor(sec / DAY_SEC);
+  if (days < 1) return "dziś";
+  if (days < 2) return "wczoraj";
+  if (days < 3) return "przedwczoraj";
+  if (days < 7) return `${countPl(days, ["dni", "dni"])} temu`;
+  const weeks = Math.floor(days / 7);
+  if (days < 30)
+    return weeks < 2 ? "tydzień temu" : `${countPl(weeks, ["tygodnie", "tygodni"])} temu`;
+  const months = Math.floor(days / 30);
+  if (days < 365) {
+    if (months < 2) return "miesiąc temu";
+    if (months < 6) return `${countPl(months, ["miesiące", "miesięcy"])} temu`;
+    return "pół roku temu";
+  }
+  const years = Math.floor(days / 365);
+  return years < 2 ? "rok temu" : `${countPl(years, ["lata", "lat"])} temu`;
+}
+
+/** "o tym budynku", "o tej ulicy": the place by its kind, as Sawa refers back to it. */
+const ABOUT_KIND_PL: Record<PlaceKind, string> = {
+  building: "o tym budynku",
+  monument: "o tym pomniku",
+  plaque: "o tej tablicy",
+  street: "o tej ulicy",
+  site: "o tym miejscu",
+  mural: "o tym muralu",
+  event: "o tym wydarzeniu",
+  church: "o tym kościele",
+  cemetery: "o tym cmentarzu",
+};
+
+const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/**
+ * What Sawa says when the listener heard about the place before. She never assumes they
+ * remember it ("Pamiętasz…"), she says when she told it: "Trzy miesiące temu opowiadałam ci
+ * o tym budynku." With something new left (`recap` false) she adds that there is more.
+ * `agoSec` missing: she knows she told it, not when.
+ */
+export function heardIntro(
+  place: Pick<Place, "kind">,
+  agoSec: number | undefined,
+  recap: boolean,
+): string {
+  const about = ABOUT_KIND_PL[place.kind] ?? "o tym miejscu";
+  if (agoSec === undefined) {
+    return recap
+      ? `Już ci kiedyś opowiadałam ${about}.`
+      : `Już ci kiedyś mówiłam ${about}, ale jest jeszcze coś.`;
+  }
+  const ago = sentence(agoPhrase(agoSec));
+  return recap
+    ? `${ago} opowiadałam ci ${about}.`
+    : `${ago} mówiłam ci już ${about}, ale jest jeszcze coś.`;
+}
+
+/** How far Sawa looks for another place when nothing new is left here ("to tuż obok"). */
+export const NEARBY_RADIUS_M = 300;
+
+const M_PER_DEG_LAT = 111_320;
+
+/** The box around `point` that holds the circle of `radiusM`. */
+export function bboxAround(point: LatLng, radiusM: number): BBox {
+  const dLat = radiusM / M_PER_DEG_LAT;
+  const dLng = radiusM / (M_PER_DEG_LAT * Math.cos((point.lat * Math.PI) / 180));
+  return {
+    minLat: point.lat - dLat,
+    maxLat: point.lat + dLat,
+    minLng: point.lng - dLng,
+    maxLng: point.lng + dLng,
+  };
+}
+
+/** The name as said aloud: without the bracketed aliases ("Kercelak (plac Kercelego)"). */
+export const spokenName = (name: string) => name.replace(/\s*\([^)]*\)/g, "").trim() || name;
+
+/**
+ * The closest place within `radiusM` with something to tell that the listener has not heard
+ * about (`heardIds`, the place itself among them); null when there is none.
+ */
+export function nearestUnheard(
+  origin: LatLng,
+  candidates: readonly PlaceSummary[],
+  heardIds: ReadonlySet<string>,
+  radiusM = NEARBY_RADIUS_M,
+): PlaceSummary | null {
+  let best: { place: PlaceSummary; m: number } | null = null;
+  for (const place of candidates) {
+    if (heardIds.has(place.id) || place.richness <= 0) continue;
+    const m = haversineM(origin, place.position);
+    if (m > radiusM || (best && best.m <= m)) continue;
+    best = { place, m };
+  }
+  return best?.place ?? null;
+}
+
+/**
+ * "Opowiedz więcej" when everything here was told: Sawa says so instead of repeating herself,
+ * and offers the place next door (`nearby`) when there is one. No LLM: short and free.
+ */
+export function nothingNewText(nearby: Pick<PlaceSummary, "name"> | null): string {
+  const done = "O tym miejscu opowiedziałam ci już wszystko, co wiem.";
+  if (!nearby) return done;
+  return `${done} Ale mogę ci opowiedzieć o miejscu tuż obok: ${spokenName(nearby.name)}.`;
 }
 
 /**

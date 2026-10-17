@@ -66,7 +66,8 @@ export type SawaMenuActions = {
   onRestart: () => void;
   /** Ile miejsc Sawa już opowiedziała temu słuchaczowi (lib/memory.ts). */
   rememberedPlaces: number;
-  onForget: () => void;
+  /** Lista opowiedzianych miejsc od najnowszego (told-modal.tsx). */
+  onOpenTold: () => void;
   /** Skąd rusza przejażdżka (lib/start-point.ts) i podpis tego, co naprawdę jest startem. */
   startMode: StartMode;
   startLabel: string;
@@ -369,28 +370,7 @@ function MenuContent({ actions, run }: MenuContentProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<number | undefined>(undefined);
-  // Zapomnienie jest nieodwracalne, więc pierwsze stuknięcie tylko pyta (bez okna dialogowego).
-  const [confirmForget, setConfirmForget] = useState(false);
-  const forgetTimer = useRef<number | undefined>(undefined);
-  useEffect(
-    () => () => {
-      window.clearTimeout(copiedTimer.current);
-      window.clearTimeout(forgetTimer.current);
-    },
-    [],
-  );
-
-  function forget() {
-    haptic();
-    window.clearTimeout(forgetTimer.current);
-    if (!confirmForget) {
-      setConfirmForget(true);
-      forgetTimer.current = window.setTimeout(() => setConfirmForget(false), 3000);
-      return;
-    }
-    setConfirmForget(false);
-    actions.onForget();
-  }
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
 
   const musicOn = useMusicOn();
   const familiarity = labelOf(FAMILIARITY, profile.familiarity, lang);
@@ -502,15 +482,12 @@ function MenuContent({ actions, run }: MenuContentProps) {
                   "Jeszcze nic. Zapamiętam, co usłyszysz",
                   "Nothing yet. I'll remember what you hear",
                 )
-              : confirmForget
-                ? t("Stuknij jeszcze raz, żeby zapomnieć", "Tap again to forget")
-                : t(
-                    `${placesLabel(actions.rememberedPlaces)} · stuknij, żeby zapomnieć`,
-                    `${placesLabelEn(actions.rememberedPlaces)} · tap to forget`,
-                  )
+              : t(
+                  `${placesLabel(actions.rememberedPlaces)} · od najnowszych`,
+                  `${placesLabelEn(actions.rememberedPlaces)} · newest first`,
+                )
           }
-          onClick={actions.rememberedPlaces === 0 ? () => {} : forget}
-          chevron={false}
+          onClick={() => run(actions.onOpenTold)}
         />
       </Group>
 

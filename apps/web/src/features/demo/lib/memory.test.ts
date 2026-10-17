@@ -46,6 +46,20 @@ describe("memory", () => {
     expect(memory.getMemory()).toEqual({ places: {}, contexts: [] });
   });
 
+  it("lists told places newest first", async () => {
+    const { memory } = await freshMemory();
+    const told = memory.toldNewestFirst({
+      places: {
+        helios: { name: "Helios", facts: ["x"], at: 100 },
+        kercelak: { name: "Kercelak", facts: ["a", "b"], at: 300 },
+        zacheta: { facts: [], at: 200 },
+      },
+      contexts: [],
+    });
+    expect(told.map((place) => place.id)).toEqual(["kercelak", "zacheta", "helios"]);
+    expect(told[0]).toMatchObject({ name: "Kercelak", facts: ["a", "b"] });
+  });
+
   it("starts empty when the stored value is broken", async () => {
     const storage = fakeStorage();
     storage.setItem("sawa.memory.v1", "{nie json");

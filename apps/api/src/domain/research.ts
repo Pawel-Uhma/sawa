@@ -1,3 +1,4 @@
+import { isDryFact } from "./dry-facts";
 import { cleanForSpeech } from "./story";
 
 /** A story or trivia about a place found on the web, with the page it comes from. */
@@ -8,7 +9,7 @@ export const MAX_FINDINGS = 6;
 /**
  * Reads the model's `{ findings: [{ text, url }] }`. A finding must come from a page the search
  * returned (`citations`); when the provider returned none, any http(s) page is kept.
- * Anything unusable is skipped, so the worst case is an empty list.
+ * Anything unusable or dry (`isDryFact`) is skipped, so the worst case is an empty list.
  */
 export function parseResearchAnswer(
   raw: string,
@@ -30,6 +31,8 @@ export function parseResearchAnswer(
     const clean = cleanForSpeech(text);
     const cited = citations.find((c) => sameUrl(c.url, url));
     if (!clean || (citations.length > 0 && !cited) || !/^https?:\/\//.test(url)) continue;
+    // The search still brings office space and parking places; they are not a story.
+    if (isDryFact(clean)) continue;
     findings.push({ text: clean, url: cited?.url ?? url, title: cited?.title ?? hostOf(url) });
     if (findings.length === MAX_FINDINGS) break;
   }

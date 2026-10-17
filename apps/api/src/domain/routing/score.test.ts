@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { place } from "./__fixtures__/synthetic";
-import { HEARD_FLOOR, RICHNESS_EXPONENT, scorePlace, weightFromRichness } from "./score";
+import {
+  HEARD_FLOOR,
+  PARTLY_HEARD_CEILING,
+  RICHNESS_EXPONENT,
+  scorePlace,
+  weightFromRichness,
+} from "./score";
 
 const interests = new Set(["historical"]);
 
@@ -38,9 +44,26 @@ describe("scorePlace", () => {
     const p = { ...place("p", 0, 0, ["historical"]), richness: 4 };
     const score = (told: number) =>
       scorePlace(p, 0, interests, { heard: new Map(told ? [["p", told]] : []) });
-    expect(score(2)).toBeCloseTo(score(0) * (HEARD_FLOOR + (1 - HEARD_FLOOR) / 2), 6);
+    const half = HEARD_FLOOR + (PARTLY_HEARD_CEILING - HEARD_FLOOR) / 2;
+    expect(score(1)).toBeLessThanOrEqual(score(0) * PARTLY_HEARD_CEILING);
+    expect(score(2)).toBeCloseTo(score(0) * half, 6);
+    expect(score(3)).toBeLessThan(score(2));
     expect(score(4)).toBeCloseTo(score(0) * HEARD_FLOOR, 6);
     expect(score(9)).toBeCloseTo(score(0) * HEARD_FLOOR, 6);
+  });
+
+  it("avoids a heard place for a new one, even one half as rich", () => {
+    const rich = { ...place("r", 0, 0, ["historical"], 4), richness: 20 };
+    const modest = { ...place("m", 0, 0, ["historical"], 2), richness: 2 };
+    const heard = new Map([["r", 1]]);
+    expect(scorePlace(modest, 0, interests, { heard })).toBeGreaterThan(
+      scorePlace(rich, 0, interests, { heard }),
+    );
+    // Told in full, it loses even to a far, plain place outside the interests.
+    const toldAll = new Map([["r", 20]]);
+    expect(scorePlace(rich, 0, interests, { heard: toldAll })).toBeLessThan(
+      scorePlace({ ...place("o", 0, 0, ["cultural"], 1), richness: 1 }, 140, interests),
+    );
   });
 
   it("halves the value at the edge of visibility", () => {

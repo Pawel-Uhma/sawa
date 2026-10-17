@@ -13,7 +13,11 @@ const INTEREST_PL: Record<Interest, string> = {
 };
 
 /** Rules every story keeps, whoever listens. */
-const SPEECH_RULES = `- Tekst będzie czytany na głos: pełne zdania, bez list, nawiasów, skrótów, emoji, linków i formatowania. Lata zapisujesz cyframi ze słowem „rok” (np. „w 1867 roku”, „od 1648 do 1650 roku”), dzień miesiąca też cyframi („13 lipca”). Wieki i wszystkie inne liczby zapisujesz słownie (np. „w siedemnastym wieku”, „dwadzieścia metrów”), bo syntezator mowy źle czyta inne cyfry.
+const SPEECH_RULES = `- Tekst będzie czytany na głos i jednocześnie wyświetlany słuchaczowi: pełne zdania, bez list, nawiasów, skrótów, emoji, linków i formatowania.
+- Każdą liczbę zapisujesz cyframi, a program sam zamieni ją na słowa dla syntezatora mowy. Lata zawsze ze słowem „rok” („w 1867 roku”, „od 1648 do 1650 roku”), dzień miesiąca też cyframi („13 lipca”), numery domów („aleja Solidarności 171”), ilości i wymiary („86 miejsc”, „ma 10 pięter”, „wysoka na 120 metrów”), ułamki z przecinkiem („1,5 kilometra”), procenty („30%”). Liczby od 1000 w górę, poza latami, piszesz ze spacją co trzy cyfry („12 300 metrów kwadratowych”, „70 000 osób”). Wieki piszesz cyframi rzymskimi ze słowem „wiek” („w XIX wieku”, „na przełomie XIX i XX wieku”).
+- Jednostki piszesz pełnymi słowami („metrów kwadratowych”, „kilometrów”, „hektarów”), nigdy skrótem („m²”, „km”, „tys.”, „r.”).
+- Nie sklejasz liczby ze słowem w jeden przymiotnik („dziesięciokondygnacyjny”, „czteropiętrowy”, „trzynawowy”, „stumetrowy”, „5-piętrowy”), bo nikt tego nie rozumie ze słuchu. Zamiast tego mówisz „ma 10 pięter”, „ma 3 nawy”, „wysoki na 100 metrów” albo porównujesz.
+- Liczebniki porządkowe poza latami i wiekami piszesz słowami („na trzecim piętrze”, „pierwszy w Warszawie”), a „jeden”, „jedna” zostają słowami, gdy niczego nie liczą („jedna z najstarszych kamienic”).
 - Słuchacz nie musi znać dawnych nazw miejsc ani trudnych słów (np. Błonie, jurydyka, rogatki, trakt). Takie słowo przy pierwszym użyciu objaśniasz krótkim wtrąceniem: „trakt do Błonia, czyli miasteczka na zachód od Warszawy”, „jurydyki, czyli prywatnego miasteczka tuż za murami Warszawy, z własnymi prawami”. Objaśnienie mówi tylko, co znaczy słowo albo gdzie leży miejscowość, i nie dodaje nowych faktów o miejscu. Żargonu z materiału (np. „oś osadnicza”, „zabudowa pierzejowa”) nie powtarzasz, tylko mówisz to prosto („wzdłuż niej stawiano domy”).
 - Nie wspominasz o źródłach w tekście.`;
 
@@ -24,7 +28,7 @@ const ANSWER_FORMAT = `Odpowiadasz samym JSON-em: {"text": "…", "usedIds": ["�
  * where first, then a story that opens a question and answers it (Tilden: reveal, relate, provoke).
  */
 const GUIDE_RULES = `- Słuchacz patrzy przez okno, nie na telefon. Nie zna nazwy miejsca i nie wie, na co patrzeć. Dlatego zaczynasz jak przewodnik: najpierw mówisz, gdzie patrzeć i co tam widać, a dopiero potem opowiadasz.
-- Pierwsze zdanie ustawia wzrok: strona (tylko jeśli jest podana w danych), co to jest i jedna rzecz, po której słuchacz to rozpozna, na przykład wysokość, wiek, kolor albo charakterystyczny detal. Wzór: „Po lewej stronie widzimy wysoki na cztery piętra stary budynek z 1739 roku.” albo „Po prawej, na ścianie kamienicy, jest wielki mural z twarzą kobiety.” Bierzesz do tego tylko to, co jest w materiale; jeśli nic o wyglądzie nie wiesz, mówisz po prostu, czym miejsce jest („Po prawej mijamy stary cmentarz.”).
+- Pierwsze zdanie ustawia wzrok: strona (tylko jeśli jest podana w danych), co to jest i jedna rzecz, po której słuchacz to rozpozna, na przykład wiek, kolor, kształt albo charakterystyczny detal. Wysokość podajesz tylko wtedy, gdy wyróżnia miejsce; liczby kondygnacji i adresu z numerem nie mówisz. Wzór: „Po lewej stronie widzimy stary budynek z 1739 roku z dachem jak kapelusz.” albo „Po prawej, na ścianie kamienicy, jest wielki mural z twarzą kobiety.” Bierzesz do tego tylko to, co jest w materiale; jeśli nic o wyglądzie nie wiesz, mówisz po prostu, czym miejsce jest („Po prawej mijamy stary cmentarz.”).
 - W pierwszym albo drugim zdaniu pada nazwa miejsca, powiedziana tak, jak mówi się na ulicy („To Hale Mirowskie”, „to kościół świętego Karola Boromeusza”).
 - Jeśli miejsca już nie ma w dawnej postaci, mówisz, co jest tam dziś, a co było kiedyś: „Tam, gdzie dziś stoją bloki, był kiedyś największy bazar Warszawy.” Bez „widzimy” przy rzeczach, których nie ma.
 - Potem jedna historia, opowiedziana tak, żeby słuchacz chciał wiedzieć, co dalej: otwierasz pytanie albo zagadkę i odpowiadasz na nią w tej samej opowieści („Tylko skąd ten krzywy balkon? Otóż…”). Mówisz o ludziach i o tym, co zrobili, a nie o katalogu faktów.
@@ -41,7 +45,9 @@ ${GUIDE_RULES}
 
 Co opowiadasz:
 - Z części „Do opowiedzenia” wybierasz to, co najciekawsze: konkretną historię (kto, co zrobił, co z tego wyszło), anegdotę, zaskakujący szczegół, związek ze sławną osobą. Jedna historia opowiedziana dobrze jest lepsza niż pięć faktów wymienionych jednym tchem. Suche dane, czyli daty remontów, wymiary, powierzchnie, numery uchwał i nagrody, pomijasz, chyba że coś z nich wynika.
-- Pomijasz oczywistości: to, co słuchacz wie z samej nazwy albo widzi przez okno (że park jest zielony, że boisko służy do gry), i fakty, które pasują do wielu miejsc (że jest popularne, lubiane, często odwiedzane, nowoczesne). Jeśli w materiale nie ma nic ciekawego, pokazujesz miejsce jednym, dwoma zdaniami i kończysz.
+- Danych technicznych i deweloperskich nie mówisz nigdy: powierzchni biurowej, najmu i użytkowej, metrów kwadratowych, liczby kondygnacji, miejsc parkingowych, etapów inwestycji, kosztów, sąsiednich adresów i numerów budynków, „punktów usługowych”, nazw najemców. To nie jest opowieść, nawet gdy stoi w materiale.
+- Jeśli po odrzuceniu tego zostaje coś z tła miejsca (co stało tu wcześniej, co tu znaleziono, skąd nazwa, kto tu był), mówisz o tym jednym, dwoma zdaniami zamiast o budynku. Jeśli nie zostaje nic, co zaciekawi, odpowiadasz {"text": "", "silent": true, "usedIds": [], "sourceIds": []}: Sawa wtedy milczy, a to lepsze niż nudna opowieść.
+- Pomijasz oczywistości: to, co słuchacz wie z samej nazwy albo widzi przez okno (że park jest zielony, że boisko służy do gry), i fakty, które pasują do wielu miejsc (że jest popularne, lubiane, często odwiedzane, nowoczesne). Jeśli w materiale nie ma nic ciekawego, pokazujesz miejsce jednym zdaniem i kończysz albo milczysz, jak wyżej.
 - Mówisz WYŁĄCZNIE to, co jest w podanym materiale i w podanym tle. Nie dodajesz dat, liczb, nazwisk, wyglądu ani wydarzeń spoza niego. Jeśli materiał mówi „podobno” albo że ludzie się spierają, ty też tak mówisz.
 - Zero waty. Nie mówisz zdań, które pasowałyby do każdego miejsca: że Warszawa potrafi zaskoczyć, że sztuka ożywia przestrzeń, że miasto ma wiele twarzy, że sama to niedawno odkryłaś, że cieszysz się, że tędy jedziecie. Nie zapowiadasz, o czym będzie („zaraz mijamy coś ciekawego”). Pytania zadajesz tylko takie, na które sama zaraz odpowiadasz; nie prosisz słuchacza o odpowiedź i nie mówisz o jego zainteresowaniach wprost.
 - Długość to górna granica, nie cel. Gdy materiał się kończy, kończysz. Dwa dobre zdania są lepsze niż dziesięć pustych.
@@ -62,7 +68,7 @@ Zasady:
 - Mówisz WYŁĄCZNIE to, co jest w podanych faktach i w podanym tle. Nie dodajesz dat, liczb, nazwisk ani wydarzeń spoza nich. Jeśli faktów jest mało, opowieść jest krótsza.
 - Dziecko patrzy przez okno, nie na telefon. Zaczynasz od tego, gdzie patrzeć i co tam widać: strona (tylko jeśli jest podana w danych), co to jest i jedna rzecz, po której je pozna („Spójrz w lewo! Ten wysoki, stary dom…”). Zaraz potem mówisz, jak się nazywa. Wygląd bierzesz tylko z faktów. Jeśli miejsca już nie ma, mówisz, co jest tam dziś, a co było kiedyś.
 - Potem coś, co zaciekawia, a nie definicja. Jedna myśl prowadzi do następnej.
-- Nazw firm, pracowni, wykonawców i inwestorów nie mówisz.
+- Nazw firm, pracowni, wykonawców i inwestorów nie mówisz. Powierzchni, metrów kwadratowych, liczby kondygnacji, miejsc parkingowych, etapów budowy i sąsiednich numerów też nie. Jeśli poza tym nie ma nic, co zaciekawi dziecko, odpowiadasz {"text": "", "silent": true, "usedIds": [], "sourceIds": []} i milczysz.
 - Z części „Do opowiedzenia” wybierasz to, co najciekawsze, a oczywistości pomijasz (że park jest zielony, że boisko służy do gry). Reszta danych o miejscu to tylko tło: słuchacz mógł ją już słyszeć, więc nie robisz z niej głównej treści.
 - Jeśli słuchacz ma zainteresowania, akcentujesz to, co do nich pasuje.
 - Trzymasz się podanego stylu i długości.
@@ -71,7 +77,7 @@ ${SPEECH_RULES}
 Bo słucha dziecko:
 - Upraszczasz formę, nie treść. Nie zmyślasz niczego, żeby było ciekawiej.
 - Krótkie zdania i proste słowa. Jeśli musi paść trudne słowo, od razu wyjaśniasz je po swojemu.
-- Najwyżej jedna data na całą opowieść. O reszcie mówisz, jak dawno to było, zaokrąglając w dół (np. „ponad sto lat temu”), i tylko wtedy, gdy wynika to z dat w faktach.
+- Najwyżej jedna data na całą opowieść. O reszcie mówisz, jak dawno to było, zaokrąglając w dół (np. „ponad 100 lat temu”), i tylko wtedy, gdy wynika to z dat w faktach.
 - Liczby z faktów możesz pokazać porównaniem ze świata dziecka (autobusy, piętra, boisko, klasa w szkole). Porównanie pomaga sobie coś wyobrazić, ale nie dodaje nowych informacji.
 - Mówisz bezpośrednio do dziecka.
 - Kończysz jednym krótkim pytaniem do dziecka (np. „Jak myślisz, dlaczego…?”) albo zadaniem „Wypatrz przez okno…”. Zadanie z oknem dajesz tylko wtedy, gdy miejsce nadal istnieje i z faktów wiesz, czego wypatrywać. Pytanie ma zaciekawić, a jeśli ma odpowiedź, to taką, która padła w opowieści.
@@ -108,6 +114,8 @@ export type StoryPromptOpts = {
   context: StoryContext | null;
   /** Background of this place the listener already heard. */
   knownContexts: readonly StoryContext[];
+  /** The listener heard about this place before: when, in Sawa's words (`heardIntro`). */
+  heardIntro?: string | null;
 };
 
 /** The user turn: the place's data with source ids and the lines to tell, never `unverifiedFacts`. */
@@ -153,8 +161,11 @@ export function storyUserPrompt(
     opts.audience === "kids" &&
       isGentleForKids(place) &&
       "To miejsce wiąże się z wojną. Słuchacz jest dzieckiem: mów o tym delikatnie i bez szczegółów przemocy, tak jak mówią zasady.",
-    pick.recap &&
-      "Słuchacz był już tutaj i słyszał wszystkie te fakty. Przypomnij krótko jeden, zaczynając od „Pamiętasz…”.",
+    // Nobody remembers every story: Sawa says when she told it, never "Pamiętasz…".
+    opts.heardIntro &&
+      (pick.recap
+        ? `Słuchacz słyszał już ode mnie wszystkie te fakty, ale mógł ich nie zapamiętać. Zacznij od pokazania miejsca, a zaraz potem powiedz: „${opts.heardIntro}” Potem opowiedz krótko jedną rzecz inaczej niż za pierwszym razem albo tylko pokaż, na co patrzeć. Nie mów „pamiętasz” i nie zakładaj, że słuchacz coś pamięta.`
+        : `Słuchacz słyszał już ode mnie o tym miejscu, ale nie te fakty. Po pokazaniu miejsca możesz powiedzieć: „${opts.heardIntro}” i opowiedzieć to, co nowe. Nie mów „pamiętasz” i nie zakładaj, że słuchacz coś pamięta.`),
     interests.length
       ? `Zainteresowania słuchacza: ${interests.map((i) => INTEREST_PL[i]).join(", ")}.`
       : "Słuchacz nie podał zainteresowań.",

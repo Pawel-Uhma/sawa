@@ -9,13 +9,14 @@ import { usePlace } from "@/features/map";
 import { SPRING } from "../lib/device";
 import { formatDuration } from "../lib/format";
 import type { MockStop } from "../lib/mock-data";
-import { spokenLength } from "../lib/story-player";
+import { spokenCut } from "../lib/story-player";
 import { useStoryWaitMessage } from "../lib/story-wait";
 import { FOLLOW_INITIAL, followReducer, SCROLL_KEYS } from "../lib/transcript-follow";
 import { Attribution, Itinerary } from "./departures";
 import { PinIcon } from "./icons";
 import { LiveDot } from "./podcast-controls";
 import { SawaMenuButton } from "./sawa-menu";
+import { StoryPhotos } from "./story-photos";
 
 /*
  * Ekran trasy na żywo (wybrany wariant A, propozycje w docs/ui/README.md).
@@ -42,6 +43,8 @@ export type RouteLiveProps = {
   isPlaying: boolean;
   /** Ile bieżącego tematu już padło (0–100). */
   progress: number;
+  /** Ile słów `storyText` Sawa już zaczęła mówić (`StoryPlayer.spokenWords`). */
+  spokenWords: number;
   /** Za ile sekund pierwsze miejsce; do tego czasu Sawa milczy. Null, gdy już może mówić. */
   waitSec: number | null;
   storyText: string | null;
@@ -50,6 +53,8 @@ export type RouteLiveProps = {
   transcript: TranscriptPart[];
   /** Nagłówek z nazwą miejsca (`PodcastHeader`), na samej górze arkusza; sterowanie jest w doku. */
   header: ReactNode;
+  /** Pod tekstem bieżącej opowieści, np. miejsce obok, które Sawa poleca (`StorySuggestion`). */
+  storyFooter?: ReactNode;
 };
 
 /* ------------------------------------------------------------------ */
@@ -77,13 +82,13 @@ function EndPill({ end }: { end: RouteLiveProps["end"] }) {
  */
 function LiveText({
   text,
-  progress,
+  spokenWords,
   state,
   className = "",
   edgeRef,
 }: {
   text: string | null;
-  progress: number;
+  spokenWords: number;
   state: RouteLiveProps["storyState"];
   className?: string;
   /** Znacznik w miejscu, do którego doszedł głos (do przewijania za nim). */
@@ -115,7 +120,7 @@ function LiveText({
       </div>
     );
   }
-  const cut = spokenLength(text, progress);
+  const cut = spokenCut(text, spokenWords);
   return (
     <p aria-live="off" className={className}>
       <span className="text-tekst transition-colors">{text.slice(0, cut)}</span>
@@ -216,11 +221,13 @@ export function RouteLive({
   isDesktop,
   isPlaying,
   progress,
+  spokenWords,
   waitSec,
   storyText,
   storyState,
   transcript,
   header,
+  storyFooter,
 }: RouteLiveProps) {
   const t = useT();
   const waiting = waitSec !== null;
@@ -318,17 +325,19 @@ export function RouteLive({
             {stop && (
               <section>
                 {/* Bez etykiety: nazwa bieżącego miejsca jest w nagłówku tuż nad zapisem */}
+                {!waiting && <StoryPhotos placeId={stop.id} name={stop.name} className="mb-4" />}
                 {waiting ? (
                   <PlacePreview placeId={stop.id} />
                 ) : (
                   <LiveText
                     text={storyText}
-                    progress={progress}
+                    spokenWords={spokenWords}
                     state={storyState}
                     edgeRef={edgeRef}
                     className="text-[19px] font-medium leading-[1.5] tracking-[-0.005em]"
                   />
                 )}
+                {!waiting && storyFooter}
               </section>
             )}
           </div>

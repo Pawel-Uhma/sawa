@@ -87,6 +87,8 @@ export function createStoryRoutes(
       // Same story as /v1/stories (shared cache), read by Sawa's voice: one call for the player.
       .post("/v1/stories/audio", limiter, jsonBody(StoryRequestSchema), async (c) => {
         const story = await stories.tell(c.req.valid("json"));
+        // Nothing worth telling here: no voice, and no credits spent on reading the name.
+        if (story.silent) return c.body(null, 204);
         const { audio, contentType } = await speech.speak(story.text);
         return c.body(audio, 200, { "Content-Type": contentType, "Cache-Control": "no-store" });
       })

@@ -46,3 +46,20 @@ describe("parseResearchAnswer", () => {
     expect(parseResearchAnswer(raw, [page])).toEqual([]);
   });
 });
+
+describe("parseResearchAnswer and dry data", () => {
+  it("drops office space and parking places found on the web", () => {
+    const raw = JSON.stringify({
+      findings: [
+        {
+          text: "Powierzchnia najmu to 12 300 m², a I etap ma 86 miejsc parkingowych.",
+          url: page.url,
+        },
+        { text: "Przy budowie znaleziono butelkę z XIX-wiecznego browaru.", url: page.url },
+      ],
+    });
+    expect(parseResearchAnswer(raw, [page]).map((f) => f.text)).toEqual([
+      "Przy budowie znaleziono butelkę z XIX-wiecznego browaru.",
+    ]);
+  });
+});

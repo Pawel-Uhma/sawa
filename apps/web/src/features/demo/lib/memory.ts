@@ -65,11 +65,22 @@ export function forgetAll() {
   write(EMPTY);
 }
 
-/** Dla planera: id miejsca → ile faktów już padło (`PlanRouteRequest.heard`). */
+/**
+ * Dla planera: id miejsca → ile faktów już padło (`PlanRouteRequest.heard`). Miejsce, o którym
+ * Sawa mówiła bez nowych faktów (przypomnienie, sama nazwa), liczy się jako jeden, żeby planer
+ * też je omijał.
+ */
 export function heardCounts(memory: Memory): Record<string, number> {
   return Object.fromEntries(
-    Object.entries(memory.places).map(([id, place]) => [id, place.facts.length]),
+    Object.entries(memory.places).map(([id, place]) => [id, Math.max(1, place.facts.length)]),
   );
+}
+
+/** Opowiedziane miejsca od najnowszego (lista „co już opowiedziała”). */
+export function toldNewestFirst(memory: Memory): Array<PlaceMemory & { id: string }> {
+  return Object.entries(memory.places)
+    .map(([id, place]) => ({ id, ...place }))
+    .sort((a, b) => b.at - a.at);
 }
 
 function subscribe(listener: () => void) {

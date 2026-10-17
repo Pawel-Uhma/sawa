@@ -19,18 +19,26 @@ export type ScorePrefs = {
 };
 
 /**
- * Value left in a place told in full. Low, so the next ride takes places with something new,
- * which over time are the less obvious ones; not zero, so a ride can still pass it.
+ * Value left in a place told in full: almost none, so a ride takes any other place it can.
+ * Not zero, so a ride with nothing else around can still pass it.
  */
-export const HEARD_FLOOR = 0.15;
+export const HEARD_FLOOR = 0.02;
+/**
+ * Most a partly told place is worth: well below a new one, so a place the listener already
+ * heard about gives way to one they have not, falling to `HEARD_FLOOR` as less is left.
+ */
+export const PARTLY_HEARD_CEILING = 0.35;
 
-/** 1 for a new place, falling with what was told there, `HEARD_FLOOR` when nothing is left. */
+/**
+ * 1 for a new place; a heard one is avoided whenever there is another: at most
+ * `PARTLY_HEARD_CEILING`, falling with what was told there, `HEARD_FLOOR` when nothing is left.
+ */
 export function noveltyOf(place: PlacePoint, heard: ReadonlyMap<string, number> | undefined) {
   const told = heard?.get(place.id) ?? 0;
   if (told === 0) return 1;
   const total = Math.max(place.richness ?? told, 1);
   const left = Math.max(0, total - told) / total;
-  return HEARD_FLOOR + (1 - HEARD_FLOOR) * left;
+  return HEARD_FLOOR + (PARTLY_HEARD_CEILING - HEARD_FLOOR) * left;
 }
 
 /** Extra value for each matching interest beyond the first. */

@@ -40,4 +40,12 @@ describe("spellYears", () => {
   it("leaves other numbers alone", () => {
     expect(spellYears("linia 25 i 50000 osób")).toBe("linia 25 i 50000 osób");
   });
+
+  it("takes three digits for a year only before „rok” and skips counted amounts", () => {
+    expect(spellYears("Solidarności 171")).toBe("Solidarności 171");
+    expect(spellYears("w 966 roku")).toBe("w dziewięćset sześćdziesiątym szóstym roku");
+    expect(spellYears("1500 osób i 2000 m²")).toBe("1500 osób i 2000 m²");
+    expect(spellYears("numer 1200")).toBe("numer 1200");
+    expect(spellYears("liczba 3,1415")).toBe("liczba 3,1415");
+  });
 });

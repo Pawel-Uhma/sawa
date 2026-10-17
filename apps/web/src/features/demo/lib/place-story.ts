@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { Listener } from "./api-data";
 import {
   audioProgress,
@@ -10,6 +10,7 @@ import {
   useLiveText,
   useRememberHeard,
 } from "./story-player";
+import { claimVoice, releaseVoice, useVoiceOwner, voiceOwner } from "./voice";
 
 /** Poza trasą nikt nie wyznacza okna, więc Sawa mówi krótko: jak zajawka. */
 export const PLACE_STORY_SEC = 45;
@@ -20,6 +21,8 @@ export type PlaceStoryState = "idle" | "loading" | "playing" | "paused" | "faile
  * Opowieść Sawy o jednym miejscu z karty: ładuje się dopiero po dotknięciu „Posłuchaj”.
  * Głos płynie strumieniem, zanim tekst jest gotowy. Postęp z dźwięku; bez głosu z długości
  * tekstu (jak w odtwarzaczu trasy).
+ * W trasie to dygresja: bierze głos Sawy, trasa cichnie i wraca, gdy dygresja go odda (koniec,
+ * błąd, zamknięta karta). Pauza dygresji głosu nie oddaje, żeby trasa nie wskoczyła w ciszę.
  */
 export function usePlaceStory(placeId: string, listener: Listener) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -28,6 +31,8 @@ export function usePlaceStory(placeId: string, listener: Listener) {
   const [progress, setProgress] = useState(0);
   const [voiceFailed, setVoiceFailed] = useState(false);
   const live = useLiveText(clip);
+  const voice = `place:${useId()}`;
+  const owner = useVoiceOwner();
 
   useEffect(() => {
     const audio = new Audio();
@@ -47,6 +52,19 @@ export function usePlaceStory(placeId: string, listener: Listener) {
       audio.removeAttribute("src");
     };
   }, []);
+
+  // Zamknięta karta oddaje głos trasie.
+  useEffect(() => () => releaseVoice(voice), [voice]);
+  // Kto inny wziął głos (np. odtwarzanie trasy): dygresja milknie.
+  useEffect(() => {
+    if (owner === voice || state !== "playing") return;
+    audioRef.current?.pause();
+    setState("paused");
+  }, [owner, voice, state]);
+  // Koniec albo błąd dygresji oddaje głos, trasa mówi dalej.
+  useEffect(() => {
+    if (progress >= 100 || state === "failed") releaseVoice(voice);
+  }, [progress, state, voice]);
 
   useEffect(() => {
     if (live.failed) setState("failed");
@@ -79,19 +97,27 @@ export function usePlaceStory(placeId: string, listener: Listener) {
     return () => cancelAnimationFrame(frame);
   }, [state, live, voiceFailed, clip]);
 
-  const start = useCallback((next: Clip) => {
-    const audio = audioRef.current;
-    if (!audio || !next.audioUrl) {
-      setState("playing");
-      return;
-    }
-    if (audio.src !== next.audioUrl) audio.src = next.audioUrl;
-    // Safari blokuje dźwięk, który nie startuje w dotknięciu; wtedy czeka na drugi tap.
-    audio
-      .play()
-      .then(() => setState("playing"))
-      .catch(() => setState("paused"));
-  }, []);
+  const start = useCallback(
+    (next: Clip) => {
+      // Głos przejęty w trakcie ładowania (np. odtwarzanie trasy): opowieść czeka na stuknięcie.
+      if (voiceOwner() !== voice) {
+        setState("paused");
+        return;
+      }
+      const audio = audioRef.current;
+      if (!audio || !next.audioUrl) {
+        setState("playing");
+        return;
+      }
+      if (audio.src !== next.audioUrl) audio.src = next.audioUrl;
+      // Safari blokuje dźwięk, który nie startuje w dotknięciu; wtedy czeka na drugi tap.
+      audio
+        .play()
+        .then(() => setState("playing"))
+        .catch(() => setState("paused"));
+    },
+    [voice],
+  );
 
   useRememberHeard(clip?.id, live.told, progress);
 
@@ -103,6 +129,7 @@ export function usePlaceStory(placeId: string, listener: Listener) {
       setState("paused");
       return;
     }
+    claimVoice(voice);
     if (clip) {
       if (progress >= 100) {
         setProgress(0);
@@ -119,7 +146,7 @@ export function usePlaceStory(placeId: string, listener: Listener) {
         start(next);
       })
       .catch(() => setState("failed"));
-  }, [state, clip, progress, placeId, listener, start, voiceFailed]);
+  }, [state, clip, progress, placeId, listener, start, voiceFailed, voice]);
 
   return { state, text: live.text, progress, toggle };
 }

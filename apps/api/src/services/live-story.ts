@@ -55,15 +55,24 @@ export function createLiveStoryService({
       let story: Story | null = null;
       // Unknown place or a failure before the first word: done, with nothing to say.
       let failed = false;
+      // When each word of the streamed text starts in the voice, sentence by sentence.
+      const wordTimes: number[] = [];
       sessions.set(id, {
         createdAt: now,
         audio,
-        state: () => ({
-          id,
-          text: story?.text ?? (failed ? "" : cleanForSpeech(text.items.join(""))),
-          done: story !== null || failed,
-          story,
-        }),
+        state: () => {
+          const streamed = failed ? "" : cleanForSpeech(text.items.join(""));
+          const shown = story?.text ?? streamed;
+          // The times count the streamed words; a finished story worded otherwise has none.
+          const timed = wordTimes.length > 0 && shown === streamed;
+          return {
+            id,
+            text: shown,
+            done: story !== null || failed,
+            story,
+            ...(timed && { wordTimes: wordTimes.slice(0, shown.split(" ").length) }),
+          };
+        },
       });
 
       (async () => {
@@ -71,8 +80,14 @@ export function createLiveStoryService({
           const told = await stories.tellStream(request);
           // The text is read on its own, so the story finishes even when the voice fails.
           const voice = (async () => {
+            // Nothing worth telling: no voice, the clip is empty and ends at once.
+            if (told.silent) return audio.end();
             try {
-              for await (const bytes of speech.speakStream(text.read(), { whole: told.whole })) {
+              const voiced = speech.speakStream(text.read(), {
+                whole: told.whole,
+                onWords: (times) => wordTimes.push(...times),
+              });
+              for await (const bytes of voiced) {
                 audio.push(bytes);
               }
               audio.end();

@@ -22,16 +22,23 @@ describe("createSentenceChunker", () => {
   it("cuts whole sentences only, the first one early and later ones longer", () => {
     const chunker = createSentenceChunker();
     const chunks: string[] = [];
-    for (const ch of `${first}${rest}Koniec`) chunks.push(...chunker.push(ch));
+    for (const ch of `${first}${rest}Koniec`) chunks.push(...chunker.push(ch).map((c) => c.spoken));
     expect(chunks).toEqual([first.trim()]);
-    expect(chunker.flush()).toBe(`${rest}Koniec`.trim());
+    expect(chunker.flush()?.spoken).toBe(`${rest}Koniec`.trim());
   });
 
   it("strips markdown and returns null when nothing is left", () => {
     const chunker = createSentenceChunker();
     expect(chunker.push("**Krótko**")).toEqual([]);
-    expect(chunker.flush()).toBe("Krótko");
+    expect(chunker.flush()).toEqual({ display: "Krótko", spoken: "Krótko" });
     expect(chunker.flush()).toBeNull();
+  });
+
+  it("keeps the text for the screen next to the text for the voice", () => {
+    const chunker = createSentenceChunker();
+    const [chunk] = chunker.push("W 1648 roku założyli tu jurydykę, https://x.pl/a. Dalej ");
+    expect(chunk?.display).toBe("W 1648 roku założyli tu jurydykę,");
+    expect(chunk?.spoken).toBe("W tysiąc sześćset czterdziestym ósmym roku założyli tu jurydykę,");
   });
 });
 
